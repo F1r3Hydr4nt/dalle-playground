@@ -34,7 +34,9 @@ print('--> Starting DALL-E Server. This might take up to two minutes.')
 
 # dalle-mini
 # DALLE_MODEL = "dalle-mini/dalle-mini/wzoooa1c:latest"  # can be wandb artifact or 🤗 Hub or local folder or google bucket
-DALLE_MODEL = 'dalle-mini/dalle-mini/mega-1:latest' # uncomment this line to use DALL-E Mega. Warning: requires significantly more storage and GPU RAM
+DALLE_MODEL = 'dalle-mini/dalle-mini/mega:latest' # uncomment this line to use DALL-E Mega. Warning: requires significantly more storage and GPU RAM
+DALLE_MODEL = 'dalle-mini/dalle-mini/mega1fp16:latest' # uncomment this line to use DALL-E Mega. Warning: requires significantly more storage and GPU RAM
+
 DALLE_COMMIT_ID = None
 
 # VQGAN model
