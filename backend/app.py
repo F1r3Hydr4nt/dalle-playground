@@ -36,7 +36,8 @@ print('--> Starting DALL-E Server. This might take up to two minutes.')
 # DALLE_MODEL = "dalle-mini/dalle-mini/wzoooa1c:latest"  # can be wandb artifact or 🤗 Hub or local folder or google bucket
 DALLE_MODEL = 'dalle-mini/dalle-mini/mega-1:latest' # uncomment this line to use DALL-E Mega. Warning: requires significantly more storage and GPU RAM
 DALLE_MODEL = "dalle-mini/dalle-mini/mega-1-fp16:latest"  # can be wandb artifact or 🤗 Hub or local folder or google bucket
-
+DALLE_MODEL = "dalle-mini/dalle-mini/mega-1-fp16:latest"  # use quantized fp16 version of mega model. Note: Uncomment the next line to ensure we're using the correct dtype for computation
+dtype = jnp.float16
 DALLE_COMMIT_ID = None
 
 # VQGAN model
@@ -54,22 +55,34 @@ wandb.init(anonymous="must")
 
 
 # Load models & tokenizer
-model = DalleBart.from_pretrained(DALLE_MODEL, revision=DALLE_COMMIT_ID)
-vqgan = VQModel.from_pretrained(VQGAN_REPO, revision=VQGAN_COMMIT_ID)
+# model = DalleBart.from_pretrained(DALLE_MODEL, revision=DALLE_COMMIT_ID)
+# vqgan = VQModel.from_pretrained(VQGAN_REPO, revision=VQGAN_COMMIT_ID)
+
+# Load dalle-mini
+model, params = DalleBart.from_pretrained(
+    DALLE_MODEL, revision=DALLE_COMMIT_ID, dtype=jnp.float16, _do_init=False
+)
+
+# Load VQGAN
+vqgan, vqgan_params = VQModel.from_pretrained(
+    VQGAN_REPO, revision=VQGAN_COMMIT_ID, _do_init=False
+)
 
 # convert model parameters for inference if requested
 if dtype == jnp.bfloat16:
     model.params = model.to_bf16(model.params)
 
-model._params = replicate(model.params)
-vqgan._params = replicate(vqgan.params)
+params = replicate(params)
+vqgan_params = replicate(vqgan_params)
 
 processor = DalleBartProcessor.from_pretrained(DALLE_MODEL, revision=DALLE_COMMIT_ID)
 
 
 # model inference
 @partial(jax.pmap, axis_name="batch", static_broadcasted_argnums=(3, 4, 5, 6))
-def p_generate(tokenized_prompt, key, params, top_k, top_p, temperature, condition_scale):
+def p_generate(
+    tokenized_prompt, key, params, top_k, top_p, temperature, condition_scale
+):    
     return model.generate(
         **tokenized_prompt,
         prng_key=key,
@@ -92,34 +105,42 @@ def tokenize_prompt(prompt: str):
   return replicate(tokenized_prompt)
 
 def generate_images(prompt:str, num_predictions: int):
-  tokenized_prompt = tokenize_prompt(prompt)
-  
-  # create a random key
-  seed = random.randint(0, 2**32 - 1)
-  key = jax.random.PRNGKey(seed)
+    tokenized_prompt = tokenize_prompt(prompt)
 
-  # generate images
-  images = []
-  for i in range(num_predictions // jax.device_count()):
-      # get a new key
-      key, subkey = jax.random.split(key)
-      
-      # generate images
-      encoded_images = p_generate(tokenized_prompt, shard_prng_key(subkey),
-          model.params,gen_top_k, gen_top_p, temperature, cond_scale,
-      )
-      
-      # remove BOS
-      encoded_images = encoded_images.sequences[..., 1:]
+    # create a random key
+    seed = random.randint(0, 2 ** 32 - 1)
+    key = jax.random.PRNGKey(seed)
 
-      # decode images
-      decoded_images = p_decode(encoded_images, vqgan.params)
-      decoded_images = decoded_images.clip(0.0, 1.0).reshape((-1, 256, 256, 3))
-      for img in decoded_images:
-          images.append(Image.fromarray(np.asarray(img * 255, dtype=np.uint8)))
-        
-  return images
+    # generate images
+    images = []
+    for i in range(num_predictions // jax.device_count()):
+        # get a new key
+        key, subkey = jax.random.split(key)
 
+        # generate images
+        encoded_images = p_generate(
+            tokenized_prompt,
+            shard_prng_key(subkey),
+            params,
+            gen_top_k,
+            gen_top_p,
+            temperature,
+            cond_scale,
+        )
+
+        # remove BOS
+        encoded_images = encoded_images.sequences[..., 1:]
+
+        # decode images
+        decoded_images = p_decode(encoded_images, vqgan_params)
+        decoded_images = decoded_images.clip(0.0, 1.0).reshape((-1, 256, 256, 3))
+        for img in decoded_images:
+            images.append(Image.fromarray(np.asarray(img * 255, dtype=np.uint8)))
+
+    return images
+
+
+@app.route("/dalle", methods=["POST"])
 @app.route('/dalle', methods=['POST'])
 @cross_origin()
 def generate_images_api():
