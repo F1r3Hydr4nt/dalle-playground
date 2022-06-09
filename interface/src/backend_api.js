@@ -1,6 +1,6 @@
 import JsonBigint from "json-bigint";
 
-const REQUEST_TIMEOUT_SEC = 2400000 // 60000
+const REQUEST_TIMEOUT_SEC = 100000000 // 60000
 
 export async function callDalleService(backendUrl, text, numImages) {
     const queryStartTime = new Date()
